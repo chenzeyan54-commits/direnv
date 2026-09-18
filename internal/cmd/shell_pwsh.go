@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 )
 
 type pwsh struct{}
@@ -39,10 +40,27 @@ else {
 }
 
 func (sh pwsh) Export(e ShellExport) (string, error) {
+	// PowerShell environment variables are backed by the Windows process
+	// environment block, which is case-insensitive. A key can appear in `e`
+	// under two casings for the same variable, e.g. `Path` removed (Windows
+	// native) while `PATH` is added (POSIX shell used to evaluate .envrc).
+	// Go map iteration order is randomized, so a Remove-Item can run after
+	// the assignment and wipe the variable that was just set. Additions
+	// take precedence over case-insensitive colliding removals.
+	added := make(map[string]bool, len(e))
+	for key, value := range e {
+		if value != nil {
+			added[strings.ToUpper(key)] = true
+		}
+	}
+
 	var out string
 	for key, value := range e {
 		if key != "" {
 			if value == nil {
+				if added[strings.ToUpper(key)] {
+					continue
+				}
 				out += sh.unset(key)
 			} else {
 				out += sh.export(key, *value)
@@ -213,7 +231,7 @@ func PowerShellEscapeVerbatimString(str string) string {
    ${env:name-with-special-chars-like-dashes} = 'value'
 
    The following special characters may NOT be used in such names: *, ?, :, =, [, ]
-   These invalid special characters are mapped to hex codes (e.g.: "*" -> "\x2A").
+   These invalid special characters are mapped to hex codes (e.g.: "*" -> "\\x2A").
 
    Curly braces may be used, if escaped with a backtick: `{, `}
 
